@@ -1,0 +1,81 @@
+name: Build APK (debug)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Configurar Java (JDK 17)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Configurar Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.7'
+          channel: stable
+          cache: true
+
+      - name: Gerar pasta de plataforma (android/)
+        run: flutter create --platforms=android .
+
+      - name: Adicionar permissões e queries no AndroidManifest
+        run: |
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          perl -0pi -e 's{(<application)}{<uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.CAMERA"/>\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>\n    $1}' "$MANIFEST"
+          perl -0pi -e 's{(<application)}{<queries>\n    <intent>\n      <action android:name="android.intent.action.VIEW"/>\n      <data android:scheme="https"/>\n    </intent>\n    <intent>\n      <action android:name="android.intent.action.VIEW"/>\n      <data android:scheme="tel"/>\n    </intent>\n    <intent>\n      <action android:name="android.intent.action.DIAL"/>\n    </intent>\n  </queries>\n    $1}' "$MANIFEST"
+          cat "$MANIFEST"
+
+      - name: Forçar compileSdk 36 em todos os módulos
+        run: |
+          if [ -f android/build.gradle.kts ]; then
+            F=android/build.gradle.kts
+            echo "" >> "$F"
+            echo "// Forca app + plugins a usarem o Android SDK 36 (CI)." >> "$F"
+            echo "subprojects {" >> "$F"
+            echo "    val p = this" >> "$F"
+            echo "    val apply36 = {" >> "$F"
+            echo '        val ext = p.extensions.findByName("android")' >> "$F"
+            echo "        if (ext is com.android.build.gradle.BaseExtension) {" >> "$F"
+            echo "            ext.compileSdkVersion(36)" >> "$F"
+            echo "        }" >> "$F"
+            echo "    }" >> "$F"
+            echo "    if (p.state.executed) apply36() else p.afterEvaluate { apply36() }" >> "$F"
+            echo "}" >> "$F"
+          else
+            F=android/build.gradle
+            echo "" >> "$F"
+            echo "// Forca app + plugins a usarem o Android SDK 36 (CI)." >> "$F"
+            echo "subprojects { proj ->" >> "$F"
+            echo "    def apply36 = {" >> "$F"
+            echo '        if (proj.hasProperty("android")) {' >> "$F"
+            echo "            proj.android { compileSdkVersion 36 }" >> "$F"
+            echo "        }" >> "$F"
+            echo "    }" >> "$F"
+            echo "    if (proj.state.executed) { apply36() } else { proj.afterEvaluate { apply36() } }" >> "$F"
+            echo "}" >> "$F"
+          fi
+          echo "----- resultado -----"
+          cat "$F"
+
+      - name: Baixar dependências
+        run: flutter pub get
+
+      - name: Compilar APK de debug
+        run: flutter build apk --debug
+
+      - name: Publicar o APK como artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: emprestafacil-debug-apk
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
